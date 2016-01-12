@@ -7,7 +7,7 @@ function rnormalprobit(n,d,se,nsamp=1000)
     for j in 1:nsamp
       for k in 1:d w[k] = eta[k] + rand(Normal(0,se)); end
       c = findmax(w)[2];
-      pi[c,i] += 1/d
+      pi[c,i] += 1/nsamp
     end
   end
   return y
