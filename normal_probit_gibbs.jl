@@ -11,7 +11,6 @@ Norm1 = Normal(0,1);
 
 lambda = rand(lambda0,K);
 alpha = rand(alpha0,K);
-u = rand(Norm1,(K,n)) .+ alpha;
 z = Array(Int64,n);
 
 for i in 1:n
@@ -21,7 +20,7 @@ for i in 1:n
   psum = 1;
   for k in 1:K
     if k < K
-      phi = cdf(Norm1,u[k,i])
+      phi = cdf(Norm1,a[k])
       pk = phi * pcum;
     else
       pk = pcum;
