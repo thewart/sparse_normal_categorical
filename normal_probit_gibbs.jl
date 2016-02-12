@@ -4,81 +4,105 @@ n = 60;
 y = [rand(Poisson(1),div(n,3)); rand(Poisson(3),div(n,3));rand(Poisson(5),div(n,3))];
 X = ones(n);
 
-#priors
-K = 10;
-a0 = 1;
-b0 = 1/3;
-SigmaB0 = eye(1);
-muB0 = 0;
 
-Norm1 = Normal(0,1);
+function psbpm(y,X,loglik,prior,burn,thin,iter)
 
-#initialize
-z = Array(Int64,n);
-lambda = rand(Gamma(a0,inv(b0)),K);
-eta = rand(Norm1,K-1)/2;
+  #priors
+  K = 10;
+  a0 = 1;
+  b0 = 1/3;
+  SigmaB0 = eye(1);
+  muB0 = 0;
 
-#precompute some regression shit
-SigmaB = inv( inv(SigmaB0) + X'X );
+  #initialize
+  samples = Dict{Symbol,Array{Float64}}();
+  z = Array(Int64,n);
+  eta = rand(Normal(),K-1)/2;
 
-#sample group memberships
-lpkx = Array(Float64,K);
-for i in 1:n
+  #precompute some regression shit
+  SigmaB = inv( inv(SigmaB0) + X'X );
 
-  lpcum = 0;
-  for k in 1:K
-    #prior weight from psbp
-    if k < K
-      lpk = logcdf(Norm1,eta[k]) + lpcum;
-      lpcum += logccdf(Norm1,eta[k]);
-    else
-      lpk = lpcum;
-    end
+  #main loop
+  for t in 1:iter
 
-    #likelihood
-    lpx = logpdf(Poisson(lambda[k]),y[i]);
-
-    lpkx[k] = lpk + lpx;
   end
 
-  #normalize and sample category membership z
-  lp = lpkx - logsumexp(lpkx);
-  z[i] = findfirst(rand(Multinomial(1,exp(lp))));
+  return samples
+
+end
+
+  #sample group memberships
+function sample_z!(z,y,eta,theta,loglik)
+  K = length(eta) + 1;
+  n = size(y)[1];
+  lpkx = Array(Float64,K);
+
+  for i in 1:n
+    lpcum = 0;
+    for k in 1:K
+      #prior weight from psbp
+      if k < K
+        lpk = logcdf(Normal(),eta[k]) + lpcum;
+        lpcum += logccdf(Normal(),eta[k]);
+      else
+        lpk = lpcum;
+      end
+
+      #likelihood
+      lpx = loglik(y[i],lambda[k]);
+
+      lpkx[k] = lpk + lpx;
+    end
+
+    #normalize and sample category membership z
+    lp = lpkx - logsumexp(lpkx);
+    z[i] = findfirst(rand(Multinomial(1,exp(lp))));
+  end
 end
 
 #sample poisson rates
-sx = zeros(Int64,K);
-nx = zeros(Int64,K);
-for i in 1:n
-  k = z[i];
-  sx[k] += y[i];
-  nx[k] += 1;
-end
+function sample_poisson(z,a0,b0,K)
+  sx = zeros(Int64,K);
+  nx = zeros(Int64,K);
+  n = length(z);
 
-for k in 1:K
-  lambda[k] = rand(Gamma(a0 + sx[k], inv( inv(b0) + nx[k])));
-end
+  for i in 1:n
+    k = z[i];
+    sx[k] += y[i];
+    nx[k] += 1;
+  end
 
-#sample latent utilities
-u = Array(Float64,(K-1,n));
-for i in 1:n
-  for k in 1:(K-1)
-
-    if k < z[i]
-      u[k,i] = rand(TruncatedNormal(eta[k],1,-Inf,0));
-    elseif (k == z[i])
-      u[k,i] = rand(TruncatedNormal(eta[k],1,0,Inf));
-    elseif k > z[i]
-      u[k,i] = rand(Normal(eta[k],1));
-    end
-
+  for k in 1:K
+    lambda[k] = rand(Gamma(a0 + sx[k], inv( inv(b0) + nx[k])));
   end
 end
 
-u
-z
-#sample eta
-muB = u*X';
-for i in 1:K
-  eta[k] = rand(Normal(muB[k],SigmaB),1);
+#sample latent utilities
+function sample_u!(u,eta)
+  (K,n) = size(u);
+
+  for i in 1:n
+    for k in 1:(K-1)
+
+      if k < z[i]
+        u[k,i] = rand(TruncatedNormal(eta[k],1,-Inf,0));
+      elseif (k == z[i])
+        u[k,i] = rand(TruncatedNormal(eta[k],1,0,Inf));
+      elseif k > z[i]
+        u[k,i] = rand(Normal(eta[k],1));
+      end
+
+    end
+  end
 end
+
+#sample eta
+function sample_eta(u,X,SigmaB)
+  K = size(u)[1]+1;
+  eta = Array(Float64,K-1);
+  muB = SigmaB.*(u*X);
+  for k in 1:(K-1)
+    eta[k] = rand(Normal(muB[k],sqrt(SigmaB[1])));
+  end
+end
+
