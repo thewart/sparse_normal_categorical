@@ -43,8 +43,9 @@ function psbpm(y,X,loglik,rtheta,prior,burn,thin,iter)
     #sample betas
     sample_B!(B,u,X,SigmaB);
 
-    nsamp = findin(saveiter,t)[1];
+    nsamp = findin(saveiter,t);
     if !isempty(nsamp)
+      nsamp = nsamp[1];
       samples[:z][:,nsamp] = z;
       samples[:B][:,:,nsamp] = B;
       linind = (length(theta)*(nsamp-1)+1):(length(theta)*nsamp);
@@ -60,14 +61,13 @@ function sample_z!(z,y,eta,theta,loglik)
   (K,n) = size(eta);
   K += 1;
   lpkx = Array(Float64,K);
-
   for i in 1:n
-    lpcum = 0;
+    lpcum = 0.0;
     for k in 1:K
       #prior weight from psbp
       if k < K
-        lpk = logcdf(Normal(),eta[k,i]) + lpcum;
-        lpcum += logccdf(Normal(),eta[k,i]);
+        lpk = normlogcdf(eta[k,i]) + lpcum;
+        lpcum += normlogccdf(eta[k,i]);
       else
         lpk = lpcum;
       end
@@ -76,6 +76,7 @@ function sample_z!(z,y,eta,theta,loglik)
       lpx = loglik(y[i],theta[k]);
 
       lpkx[k] = lpk + lpx;
+
     end
 
     #normalize and sample category membership z
@@ -132,3 +133,16 @@ function sample_B!(B,u,X,SigmaB)
   end
 end
 
+function eta2p(x,B)
+  eta = B'x;
+  K = length(eta)+1;
+  p = Array{Float64}(K);
+  pcol = 1;
+  for k in 1:(K-1)
+    pi = normcdf(eta[k]);
+    p[k] = pi * pcol;
+    pcol *= 1-pi;
+  end
+  p[K] = pcol;
+  return p
+end
