@@ -1,5 +1,6 @@
 function psbpm(y,X,loglik,rtheta,prior,burn,thin,iter)
 
+  n = length(y);
   K = prior[:K];
   if (isempty(X))
     X = ones(1,n);
@@ -10,15 +11,14 @@ function psbpm(y,X,loglik,rtheta,prior,burn,thin,iter)
   saveiter = (burn+1):thin:iter;
   nsave = length(saveiter);
   niter = maximum(saveiter);
-  theta = prior[:theta0];
 
   samples = Dict{Symbol,Array{Float64}}();
   samples[:theta] = Array{Float64}(
-    tuple(vcat(collect(size(theta)),nsave)...));
+    tuple(vcat(collect(prior[:theta_dim]),nsave)...));
   samples[:B] = Array{Float64}(p,K-1,nsave);
   samples[:z] = Array{Int64}(n,nsave);
 
-  z = Array{Int64}(n);
+  z = rand(1:K,n);
   u = Array{Float64}(K-1,n);
   eta = Array{Float64}(K-1,n);
   B = rand(Normal(),(p,K-1))/2;
@@ -31,11 +31,11 @@ function psbpm(y,X,loglik,rtheta,prior,burn,thin,iter)
 
     @into! eta = B'*X;
 
-    #sample group memberships
-    sample_z!(z,y,eta,theta,loglik);
-
     #sample likelihood parameters
     theta = rtheta(z,prior);
+
+    #sample group memberships
+    sample_z!(z,y,eta,theta,loglik);
 
     #sample latent utilities
     sample_u!(u,z,eta);
