@@ -1,4 +1,4 @@
-function psbpm(y,X,loglik,rtheta,prior,burn,thin,iter)
+function psbpm(y,X,loglik,rtheta,prior,hyperprior,burn,thin,iter)
 
   K = prior[:K];
   if (isempty(X))
@@ -10,6 +10,12 @@ function psbpm(y,X,loglik,rtheta,prior,burn,thin,iter)
   saveiter = (burn+1):thin:iter;
   nsave = length(saveiter);
   niter = maximum(saveiter);
+
+  z = Array{Int64}(n);
+  u = Array{Float64}(K-1,n);
+  eta = Array{Float64}(K-1,n);
+  B = rand(Normal(),(p,K-1))/2
+  sigmaB0 = 1.0;
   theta = prior[:theta0];
 
   samples = Dict{Symbol,Array{Float64}}();
@@ -17,14 +23,10 @@ function psbpm(y,X,loglik,rtheta,prior,burn,thin,iter)
     tuple(vcat(collect(size(theta)),nsave)...));
   samples[:B] = Array{Float64}(p,K-1,nsave);
   samples[:z] = Array{Int64}(n,nsave);
+  samples[:sigmaB0] = Array{Float64}(nsave);
 
-  z = Array{Int64}(n);
-  u = Array{Float64}(K-1,n);
-  eta = Array{Float64}(K-1,n);
-  B = rand(Normal(),(p,K-1))/2;
 
   #precompute some regression shit
-  SigmaB = inv( inv(prior[:SigmaB0]) + X*X' );
 
   #main loop
   for t in 1:iter
@@ -41,13 +43,16 @@ function psbpm(y,X,loglik,rtheta,prior,burn,thin,iter)
     sample_u!(u,z,eta);
 
     #sample betas
-    sample_B!(B,u,X,SigmaB);
+    sample_B!(B,u,X,sigmaB0);
+
+    sigmaB0 = sample_sigmaB0(B,hyperprior[:a0],hyperprior[:b0]);
 
     nsamp = findin(saveiter,t);
     if !isempty(nsamp)
       nsamp = nsamp[1];
       samples[:z][:,nsamp] = z;
       samples[:B][:,:,nsamp] = B;
+      samples[:sigmaB0][nsamp] = sigmaB0;
       linind = (length(theta)*(nsamp-1)+1):(length(theta)*nsamp);
       samples[:theta][linind] = theta;
     end
@@ -124,13 +129,21 @@ function sample_u!(u,z,eta)
   end
 end
 
-function sample_B!(B,u,X,SigmaB)
+function sample_B!(B,u,X,sigmaB0)
   K = size(u)[1]+1;
-
-  muB = SigmaB*X*u';
+  p = size(X)[1];
+  SigmaB0 = diagm(fill(sigmaB0,p));
+  SigmaB = inv( inv(SigmaB0) + X*X' );
+  muB = SigmaB*(X*u');
   for k in 1:(K-1)
     B[:,k] = rand(MvNormal(muB[:,k],SigmaB));
   end
+end
+
+function sample_sigmaB0(B::Array{Float64},a0::Float64,b0::Float64)
+  n = length(B);
+  ss = sumabs2(B);
+  sigmaB0 = 1/rand(Gamma(n/2+a0,inv(ss/2+b0)));
 end
 
 function eta2p(x,B)
