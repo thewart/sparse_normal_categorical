@@ -22,6 +22,7 @@ function psbpm(y,X,loglik,rtheta,prior,burn,thin,iter)
   u = Array{Float64}(K-1,n);
   eta = Array{Float64}(K-1,n);
   B = rand(Normal(),(p,K-1))/2;
+  lpk = Array{Float64}(K,n);
 
   #precompute some regression shit
   SigmaB = inv( inv(prior[:SigmaB0]) + X*X' );
@@ -57,7 +58,7 @@ function psbpm(y,X,loglik,rtheta,prior,burn,thin,iter)
 
 end
 
-function sample_z!(z,y,eta,theta,loglik)
+function sample_z!(z,y,eta,theta,loglik,lpk)
   (K,n) = size(eta);
   K += 1;
   lpkx = Array(Float64,K);
@@ -66,7 +67,7 @@ function sample_z!(z,y,eta,theta,loglik)
     for k in 1:K
       #prior weight from psbp
       if k < K
-        lpk = normlogcdf(eta[k,i]) + lpcum;
+        lpk[k,i] = normlogcdf(eta[k,i]) + lpcum;
         lpcum += normlogccdf(eta[k,i]);
       else
         lpk = lpcum;
@@ -75,7 +76,7 @@ function sample_z!(z,y,eta,theta,loglik)
       #likelihood
       lpx = loglik(y[i],theta[k]);
 
-      lpkx[k] = lpk + lpx;
+      lpkx[k] = lpk[k,i] + lpx;
 
     end
 
@@ -145,4 +146,35 @@ function eta2p(x,B)
   end
   p[K] = pcol;
   return p
+end
+
+function labelswitch1!(z,theta,lpk)
+  n = length(z);
+  j,l = sample(1:n,2,replace=false);
+  zj = find(z.==j);
+  zl = find(z.==l);
+
+  pjj = 0;
+  pjl = 0;
+  plj = 0;
+  pll = 0;
+
+  for i in zj
+    pjj += lpk[j,zj[i]];
+    pjl += lpk[l,zj[i]];
+  end
+
+  for i in zl
+    pll += lpk[l,zl[i]];
+    plj += lpk[j,zl[i]];
+  end
+
+  p = exp(plj + pjl - pll - pjj);
+  if rand() < p
+    z[zj] = l;
+    z[zl] = j;
+    theta[[j,l]] = theta[[l,j]];
+    lpk[[j,l],:] = lpk[[l,j],:];
+  end
+
 end
