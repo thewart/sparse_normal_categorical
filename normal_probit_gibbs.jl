@@ -36,7 +36,20 @@ function psbpm(y,X,loglik,rtheta,prior,burn,thin,iter)
     theta = rtheta(z,prior);
 
     #sample group memberships
-    sample_z!(z,y,eta,theta,loglik);
+    sample_z!(z,y,eta,theta,loglik,lpk);
+
+    #do the label switch
+    for i in 1:100
+      flip,(j,l) = labelswitch2!(z,lpk,eta);
+      if flip
+        theta[[j,l]] = theta[[l,j]];
+        if l < K
+          B[:,[j,l]] = B[:,[l,j]];
+          eta[[j,l],:] = eta[[l,j],:];
+        end
+          lpk[[j,l],:] = lpk[[l,j],:];
+      end
+    end
 
     #sample latent utilities
     sample_u!(u,z,eta);
@@ -70,7 +83,7 @@ function sample_z!(z,y,eta,theta,loglik,lpk)
         lpk[k,i] = normlogcdf(eta[k,i]) + lpcum;
         lpcum += normlogccdf(eta[k,i]);
       else
-        lpk = lpcum;
+        lpk[k,i] = lpcum;
       end
 
       #likelihood
@@ -146,35 +159,4 @@ function eta2p(x,B)
   end
   p[K] = pcol;
   return p
-end
-
-function labelswitch1!(z,theta,lpk)
-  n = length(z);
-  j,l = sample(1:n,2,replace=false);
-  zj = find(z.==j);
-  zl = find(z.==l);
-
-  pjj = 0;
-  pjl = 0;
-  plj = 0;
-  pll = 0;
-
-  for i in zj
-    pjj += lpk[j,zj[i]];
-    pjl += lpk[l,zj[i]];
-  end
-
-  for i in zl
-    pll += lpk[l,zl[i]];
-    plj += lpk[j,zl[i]];
-  end
-
-  p = exp(plj + pjl - pll - pjj);
-  if rand() < p
-    z[zj] = l;
-    z[zl] = j;
-    theta[[j,l]] = theta[[l,j]];
-    lpk[[j,l],:] = lpk[[l,j],:];
-  end
-
 end
