@@ -23,7 +23,9 @@ function labelswitch2!(z,lpk,eta)
     pjj += lpk[j,i];
   end
 
-  flip = rand() < exp(plj + pjl - pll - pjj);
+  p = exp(plj + pjl - pll - pjj);
+  print(j," ",l," ",p,"\n");
+  flip = rand() < p;
   if flip
       z[zj] = l;
       z[zl] = j;

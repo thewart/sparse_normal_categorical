@@ -17,11 +17,15 @@ function psbpm(y,X,loglik,rtheta,prior,burn,thin,iter)
     tuple(vcat(collect(prior[:theta_dim]),nsave)...));
   samples[:B] = Array{Float64}(p,K-1,nsave);
   samples[:z] = Array{Int64}(n,nsave);
+  #samples[:muB0] = Array{Float64}(nsave);
 
   z = rand(1:K,n);
+  #z = [fill(1,250);fill(2,125);fill(3,125)];
   u = Array{Float64}(K-1,n);
   eta = Array{Float64}(K-1,n);
   B = rand(Normal(),(p,K-1))/2;
+  #B = zeros(1,K-1); B[3] = 2;
+  #muB0 = 0;
   lpk = Array{Float64}(K,n);
 
   #precompute some regression shit
@@ -39,7 +43,7 @@ function psbpm(y,X,loglik,rtheta,prior,burn,thin,iter)
     sample_z!(z,y,eta,theta,loglik,lpk);
 
     #do the label switch
-    for i in 1:100
+    for i in 1:round(Int,K/2)
       flip,(j,l) = labelswitch2!(z,lpk,eta);
       if flip
         theta[[j,l]] = theta[[l,j]];
@@ -55,7 +59,10 @@ function psbpm(y,X,loglik,rtheta,prior,burn,thin,iter)
     sample_u!(u,z,eta);
 
     #sample betas
-    sample_B!(B,u,X,SigmaB);
+    sample_B!(B,u,X,SigmaB,prior[:muB0],prior[:SigmaB0][1]);
+
+    #sample hyperparameters for beta
+    muB0 = sample_hyper(B,prior[:SigmaB0][1],prior[:mu_mu0],prior[:sigma_mu0]);
 
     nsamp = findin(saveiter,t);
     if !isempty(nsamp)
@@ -64,6 +71,7 @@ function psbpm(y,X,loglik,rtheta,prior,burn,thin,iter)
       samples[:B][:,:,nsamp] = B;
       linind = (length(theta)*(nsamp-1)+1):(length(theta)*nsamp);
       samples[:theta][linind] = theta;
+      #samples[:muB0][nsamp] = muB0;
     end
   end
 
@@ -138,13 +146,23 @@ function sample_u!(u,z,eta)
   end
 end
 
-function sample_B!(B,u,X,SigmaB)
+function sample_B!(B,u,X,SigmaB,muB0,sigmaB0)
   K = size(u)[1]+1;
 
-  muB = SigmaB*X*u';
+  muB = SigmaB*(X*u' .+ muB0/sigmaB0);
   for k in 1:(K-1)
     B[:,k] = rand(MvNormal(muB[:,k],SigmaB));
   end
+end
+
+function sample_hyper(B,sigmaB0,mu0,sigma0)
+  n = length(B);
+  yhat = mean(B);
+  sigma = 1/(1/sigma0 + n/sigmaB0);
+  mu = sigma*(mu0/sigma0 + n*yhat/sigmaB0)
+  muB0 = rand(Normal(mu,sqrt(sigma)));
+
+  return muB0
 end
 
 function eta2p(x,B)
