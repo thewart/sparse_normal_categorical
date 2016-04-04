@@ -1,11 +1,7 @@
-function psbpm(y,X,loglik,rtheta,prior,burn,thin,iter)
+function psbpm(y,loglik,rtheta,prior,burn,thin,iter)
 
   n = length(y);
   K = prior[:K];
-  if (isempty(X))
-    X = ones(1,n);
-  end
-  p = size(X)[1];
 
   #initialize
   saveiter = (burn+1):thin:iter;
@@ -14,42 +10,56 @@ function psbpm(y,X,loglik,rtheta,prior,burn,thin,iter)
 
   samples = Dict{Symbol,Array{Float64}}();
   samples[:theta] = Array{Float64}(
-    tuple(vcat(collect(prior[:theta_dim]),nsave)...));
-  samples[:B] = Array{Float64}(p,K-1,nsave);
+    tuple(vcat(collect(prior[:theta_dim]),K,nsave)...));
+  samples[:alpha] = Array{Float64}(K-1,nsave);
   samples[:z] = Array{Int64}(n,nsave);
+  samples[:u] = Array{Float64}(K-1,n,nsave);
+#  samples[:prealpha] = Array{Float64}(K-1,nsave);
+#  samples[:postalpha] = Array{Float64}(K-1,nsave);
 
   z = rand(1:K,n);
   u = Array{Float64}(K-1,n);
-  eta = Array{Float64}(K-1,n);
-  B = rand(Normal(),(p,K-1))/2;
-
-  #precompute some regression shit
-  SigmaB = inv( inv(prior[:SigmaB0]) + X*X' );
+  alpha = randn(K-1)*prior[:sigmaAlpha] + prior[:muAlpha];
+  lpk = Array{Float64}(K);
 
   #main loop
   for t in 1:iter
 
-    @into! eta = B'*X;
-
     #sample likelihood parameters
-    theta = rtheta(z,prior);
+    theta = rtheta(y,z,prior);
 
     #sample group memberships
-    sample_z!(z,y,eta,theta,loglik);
-
+    sample_z!(z,y,alpha,theta,loglik,lpk);
+#    prealpha = deepcopy(alpha);
+    if prior[:nls] > 0
+      for i in 1:prior[:nls]
+        flip,(j,l) = labelswitch2!(z,lpk,alpha);
+        if flip
+          theta[[j,l]] = theta[[l,j]];
+          lpk[[j,l]] = lpk[[l,j]];
+          if l < K
+            alpha[[j,l]] = alpha[[l,j]];
+          end
+        end
+      end
+    end
+#    postalpha = deepcopy(alpha);
     #sample latent utilities
-    sample_u!(u,z,eta);
+    sample_u!(u,z,alpha);
 
     #sample betas
-    sample_B!(B,u,X,SigmaB);
+    sample_alpha!(alpha,u,prior[:muAlpha],prior[:sigmaAlpha])
 
     nsamp = findin(saveiter,t);
     if !isempty(nsamp)
       nsamp = nsamp[1];
       samples[:z][:,nsamp] = z;
-      samples[:B][:,:,nsamp] = B;
+      samples[:alpha][:,nsamp] = alpha;
+ #     samples[:prealpha][:,nsamp] = prealpha;
+ #     samples[:postalpha][:,nsamp] = postalpha;
       linind = (length(theta)*(nsamp-1)+1):(length(theta)*nsamp);
       samples[:theta][linind] = theta;
+      samples[:u][:,:,nsamp] = u;
     end
   end
 
@@ -57,26 +67,29 @@ function psbpm(y,X,loglik,rtheta,prior,burn,thin,iter)
 
 end
 
-function sample_z!(z,y,eta,theta,loglik)
-  (K,n) = size(eta);
-  K += 1;
+function sample_z!(z,y,alpha,theta,loglik,lpk)
+  n = length(y);
+  K = length(alpha) + 1;
   lpkx = Array(Float64,K);
-  for i in 1:n
-    lpcum = 0.0;
-    for k in 1:K
-      #prior weight from psbp
+
+  #prior weight from psbp
+  lpcum = 0.0;
+  for k in 1:K
       if k < K
-        lpk = normlogcdf(eta[k,i]) + lpcum;
-        lpcum += normlogccdf(eta[k,i]);
+        lpk[k] = normlogcdf(alpha[k]) + lpcum;
+        lpcum += normlogccdf(alpha[k]);
       else
-        lpk = lpcum;
+        lpk[k] = lpcum;
       end
+  end
+
+  for i in 1:n
+    for k in 1:K
 
       #likelihood
       lpx = loglik(y[i],theta[k]);
 
-      lpkx[k] = lpk + lpx;
-
+      lpkx[k] = lpk[k] + lpx;
     end
 
     #normalize and sample category membership z
@@ -85,91 +98,71 @@ function sample_z!(z,y,eta,theta,loglik)
   end
 end
 
-#sample poisson rates
-function sample_poisson(z,prior)
-  K = prior[:K];
-  sz = zeros(Int64,K);
-  nz = zeros(Int64,K);
-  n = length(z);
-  lambda = Array(Float64,K);
-
-  for i in 1:n
-    k = z[i];
-    sz[k] += y[i];
-    nz[k] += 1;
-  end
-
-  for k in 1:K
-    lambda[k] = rand(Gamma(prior[:a0] + sz[k], inv(prior[:b0] + nz[k])));
-  end
-
-  return lambda;
-end
-
-#sample poisson set
-function sample_multipoisson(Y,z,prior)
-  K = prior[:K];
-  d = length(Y[1]);
-  n = length(z);
-  sz = zeros(Int64,d,K);
-  nz = zeros(Int64,K);
-  n = length(z);
-  lambda = Array(Float64,K);
-
-  for i in 1:n
-    k = z[i];
-    nz[k] += 1;
-    for j in 1:d
-      sz[k,j] += Y[i][j];
-    end
-  end
-
-  for k in 1:K
-    for j in 1:d
-      lambda[k] = rand(Gamma(prior[:a0] + sz[k], inv(prior[:b0] + nz[k])));
-    end
-  end
-
-  return lambda;
-end
-
-function sample_u!(u,z,eta)
+function sample_u!(u,z,alpha)
   (K,n) = size(u);
   K += 1;
   for i in 1:n
     for k in 1:(K-1)
 
       if k < z[i]
-        u[k,i] = rand(TruncatedNormal(eta[k,i],1,-Inf,0));
+        u[k,i] = rand(TruncatedNormal(alpha[k],1,-Inf,0));
       elseif (k == z[i])
-        u[k,i] = rand(TruncatedNormal(eta[k,i],1,0,Inf));
+        u[k,i] = rand(TruncatedNormal(alpha[k],1,0,Inf));
       elseif k > z[i]
-        u[k,i] = rand(Normal(eta[k,i],1));
+        u[k,i] = rand(Normal(alpha[k],1));
       end
 
     end
   end
 end
 
-function sample_B!(B,u,X,SigmaB)
-  K = size(u)[1]+1;
-
-  muB = SigmaB*X*u';
+function sample_alpha!(alpha,y,muAlpha,sigmaAlpha)
+  K,n = size(y);
+  K += 1;
+  yhat = mean(y,2);
+  csigma = inv( inv(sigmaAlpha) + n );
   for k in 1:(K-1)
-    B[:,k] = rand(MvNormal(muB[:,k],SigmaB));
+    cmu = csigma * (muAlpha/sigmaAlpha + n*yhat[k]);
+    alpha[k] = randn()*sqrt(csigma) + cmu;
   end
 end
 
-function eta2p(x,B)
-  eta = B'x;
-  K = length(eta)+1;
+function a2p(alpha)
+  K = length(alpha)+1;
   p = Array{Float64}(K);
   pcol = 1;
   for k in 1:(K-1)
-    pi = normcdf(eta[k]);
+    pi = normcdf(alpha[k]);
     p[k] = pi * pcol;
     pcol *= 1-pi;
   end
   p[K] = pcol;
   return p
+end
+
+function labelswitch2!(z,lpk,alpha)
+  K = size(lpk)[1];
+  j::Int = sample(1:(K-1));
+  l = j+1;
+  zj = find(z.==j);
+  zl = find(z.==l);
+  p = 0.0;
+
+  for i in zl
+    p -= normlogccdf(alpha[j]);
+  end
+
+  if l < K
+    for i in zj
+      p += normlogcdf(alpha[l]);
+    end
+  end
+
+  flip = rand() < exp(p);
+  if flip
+      z[zj] = l;
+      z[zl] = j;
+  end
+
+  return flip,(j,l)
 end
